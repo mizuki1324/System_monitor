@@ -1,6 +1,6 @@
 # System Monitor 🚀  
 
-A basic system metric logger I created for my friend's PC that always crashes (smh). Also sends out an alert email before it crashes so I can scream at them to close the 100 open Chrome tabs.  
+I created a basic system metric logger for my friend's PC that always crashes (smh). It sends out an alert email before it crashes so I can scream at them to close the 100 open Chrome tabs.  
 
 ## 📌 Features  
 ✅ Detects high CPU, RAM, and Disk usage.  
