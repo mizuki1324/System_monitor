@@ -1,89 +1,71 @@
 import psutil
-import time
-import os
-import datetime
 import smtplib
-import json
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import os
 from dotenv import load_dotenv
+import time
 
 # Load environment variables
 load_dotenv()
+
 EMAIL_SENDER = os.getenv("EMAIL_SENDER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 SMTP_SERVER = os.getenv("SMTP_SERVER")
-SMTP_PORT = int(os.getenv("SMTP_PORT"))
+SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
 
-# Configuration
-LOG_INTERVAL = 10  # Time interval in seconds
-CRASH_THRESHOLD = {"CPU": 95, "RAM": 95, "Disk": 95}  # Threshold for critical usage
+ALERT_THRESHOLD_CPU = 90  # CPU usage threshold %
+ALERT_THRESHOLD_RAM = 90  # RAM usage threshold %
+ALERT_THRESHOLD_TEMP = 85  # CPU temperature threshold (if supported)
+CHECK_INTERVAL = 5  # Seconds between checks
 
-def send_email(subject, message):
-    """Sends an email notification."""
+def get_chrome_memory_usage():
+    """Returns total memory usage of all Chrome processes."""
+    total_memory = 0
+    for process in psutil.process_iter(attrs=['name', 'memory_info']):
+        if process.info['name'] and "chrome" in process.info['name'].lower():
+            total_memory += process.info['memory_info'].rss  # Resident Set Size (RAM)
+    return total_memory / (1024 * 1024)  # Convert to MB
+
+def get_cpu_temperature():
+    """Returns CPU temperature if available, otherwise None."""
+    if hasattr(psutil, "sensors_temperatures"):
+        temps = psutil.sensors_temperatures()
+        if "coretemp" in temps:
+            return temps["coretemp"][0].current  # Return first core's temperature
+    return None  # If temperature data is not available
+
+def send_email_alert(subject, body):
+    """Sends an email alert."""
     try:
-        msg = MIMEMultipart()
-        msg["From"] = EMAIL_SENDER
-        msg["To"] = EMAIL_RECEIVER
-        msg["Subject"] = subject
-        msg.attach(MIMEText(message, "plain"))
-
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
             server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
-
-        print(f"📧 Email sent: {subject}")
+            message = f"Subject: {subject}\n\n{body}"
+            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, message)
+        print("[ALERT] Email sent successfully!")
     except Exception as e:
-        print(f"⚠️ Failed to send email: {e}")
+        print(f"[ERROR] Failed to send email: {e}")
 
-def log_and_check_crash():
-    """Logs system metrics and sends an email before a crash occurs."""
-    last_known_state = None
-    crash_warning_sent = False
-
+def monitor_system():
+    """Monitors CPU, RAM, Chrome memory usage, and temperature."""
     while True:
-        try:
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            cpu_usage = psutil.cpu_percent(interval=1)
-            ram_usage = psutil.virtual_memory().percent
-            disk_usage = psutil.disk_usage('/').percent
+        cpu_usage = psutil.cpu_percent(interval=1)
+        ram_usage = psutil.virtual_memory().percent
+        chrome_memory = get_chrome_memory_usage()
+        cpu_temp = get_cpu_temperature()
 
-            log_data = {
-                "Timestamp": timestamp,
-                "CPU Usage (%)": cpu_usage,
-                "RAM Usage (%)": ram_usage,
-                "Disk Usage (%)": disk_usage
-            }
+        print(f"CPU: {cpu_usage}%, RAM: {ram_usage}%, Chrome Memory: {chrome_memory:.2f} MB")
+        if cpu_temp:
+            print(f"CPU Temperature: {cpu_temp}°C")
 
-            last_known_state = log_data  # Save last known state
+        # Alert conditions
+        if cpu_usage > ALERT_THRESHOLD_CPU or ram_usage > ALERT_THRESHOLD_RAM or (cpu_temp and cpu_temp > ALERT_THRESHOLD_TEMP):
+            alert_msg = f"High Resource Usage Detected!\nCPU: {cpu_usage}%\nRAM: {ram_usage}%\nChrome Memory: {chrome_memory:.2f} MB"
+            if cpu_temp:
+                alert_msg += f"\nCPU Temp: {cpu_temp}°C"
+            send_email_alert("🚨 System Warning: High Usage Detected!", alert_msg)
 
-            print(f"[{timestamp}] CPU: {cpu_usage}%, RAM: {ram_usage}%, Disk: {disk_usage}%")
-
-            # If any metric exceeds the crash threshold, send a warning email
-            if (cpu_usage > CRASH_THRESHOLD["CPU"] or
-                ram_usage > CRASH_THRESHOLD["RAM"] or
-                disk_usage > CRASH_THRESHOLD["Disk"]):
-
-                if not crash_warning_sent:  # Avoid sending multiple alerts
-                    send_email("⚠️ Warning: System May Crash!", f"High resource usage detected:\n{json.dumps(log_data, indent=2)}")
-                    crash_warning_sent = True
-
-            else:
-                crash_warning_sent = False  # Reset warning flag if system stabilizes
-
-            time.sleep(LOG_INTERVAL)
-
-        except Exception as e:
-            print(f"⚠️ System crashed or monitoring failed: {e}")
-            if last_known_state:
-                send_email("🚨 System Crashed!", f"Last known state before crash:\n{json.dumps(last_known_state, indent=2)}")
-            break
+        time.sleep(CHECK_INTERVAL)
 
 if __name__ == "__main__":
-    print("🚀 Monitoring system for potential crashes... Press Ctrl+C to stop.")
-    try:
-        log_and_check_crash()
-    except KeyboardInterrupt:
-        print("🛑 Monitoring stopped.")
+    monitor_system()
