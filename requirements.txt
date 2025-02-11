@@ -1,3 +1,2 @@
 psutil
 python-dotenv
-smtplib
